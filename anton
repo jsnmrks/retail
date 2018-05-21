@@ -1,0 +1,437 @@
+#File to automate ad-hoc style reports for rollups
+
+#Step 1: Bring in CC level data for LY and TY
+setwd("C:/Users/Aodqvis/Box Sync/2018/R Experimentation")
+getwd()
+library(readxl)
+raw_data <- read_excel("CC Level TY vs_LY_data_midsight.xlsx", 
+                                     skip = 2)
+
+#Step 2: The data is not set up optimally, we need to separate 2017 and 2018 and re-join them so that the information is all in columns
+install.packages(dplyr)
+library(dplyr)
+data_2017 <- raw_data %>% filter(Year==2017)
+data_2018 <- raw_data %>% filter(Year==2018)
+joined_data <- data_2018 %>%  full_join(x = data_2018,y = data_2017,
+                                        by = c("Department","Class","Sub-Class","Style","Style/Color (CC)"),
+                                        suffix = c(".2018", ".2017"))
+
+#check to make sure we have all style/ccs
+joined_data %>% summarize(length(unique(`Style/Color (CC)`)))
+raw_data %>% summarize(length(unique(`Style/Color (CC)`)))
+#both have 5309 observations of Stlye/cc, this is good
+
+#Step 3: Now that we have the data organized, we want to tack on the merchandising attributes
+#We want to load an attribute file and then join it with the year separated files (since there is either a 2017 or 2018 style number)
+Attributes <- read_excel("Bacon Attribute Rollup.xlsx")                       
+
+#First we have to separate out the style number from each file since that will be our join condition (six digits)
+data_2017$Stylenumber <- as.character(substr(data_2017$`Style/Color (CC)`,start = 0,stop = 6))
+data_2018$Stylenumber <- as.character(substr(data_2018$`Style/Color (CC)`,start = 0,stop = 6))
+
+#Change data type of style number column in Attributes to be able to join
+Attributes$`2017 #`<- as.numeric(Attributes$`2017 #`)
+Attributes$`2018 #`<- as.numeric(Attributes$`2018 #`)
+Attributes_2017 <- Attributes %>% select(`Attribute 1`,`Attribute 2`,`Attribute 3`,`2017 #`) %>% filter(!is.na(`2017 #`))
+Attributes_2018 <- Attributes %>% select(`Attribute 1`,`Attribute 2`,`Attribute 3`,`2018 #`) %>% filter(!is.na(`2018 #`))
+#wb1 <- createWorkbook(type = "xlsx")
+library(xlsx)
+#Attributes_a <- createSheet(wb1,sheetName = "LY")
+#addDataFrame(x = data_2017_attributes, sheet = Attributes_a, startRow=1, startColumn=1)
+#Attributes_b <- createSheet(wb1, sheetName = "TY")
+#addDataFrame(x = data_2018_attributes, sheet = Attributes_b, startRow=1, startColumn=1)
+#saveWorkbook(wb1,"Attributes.xlsx")
+#Joing the attributes in individually to the year files
+data_2017$Stylenumber <- as.numeric(data_2017$Stylenumber)
+data_2018$Stylenumber <- as.numeric(data_2018$Stylenumber)
+data_2017_attributes <- data_2017 %>% full_join(x=data_2017,y = Attributes_2017,by = c("Stylenumber" = "2017 #"))
+data_2018_attributes <- data_2018 %>% full_join(x=data_2018,y = Attributes_2018,by = c("Stylenumber" = "2018 #"))                                                
+
+
+#re-join the two tables with the now included attributes
+joined_data_attributes <- data_2018_attributes %>%  full_join(x = data_2018_attributes,y = data_2017_attributes,
+                                        by = c("Department","Class","Sub-Class","Style","Style/Color (CC)"),
+                                        suffix = c(".2018", ".2017"))
+
+
+#We can start aggregating our metricsbut ther's a couple issues with the data: 
+#1:) We need to replace NAs, and 2:) metrics like AUR and AUC need to be manually calculated or else they wont agggregate properly
+joined_data_attributes[is.na(joined_data_attributes)] <- 0 
+joined_data_attributes <- joined_data_attributes %>% subset(select =  -c(`Net Sales AUR Mkd.2017`,
+                                                                         `Net Sales AUC.2018`,`Net Sales AUR.2017`,`Net Sales AUR Mkd.2018`,
+                                                                         `Net Sales AUC Blended.2018`,`Net Sales AUC Mkd.2018`,`Net Sales AUR Blended.2017`,
+                                                                         `Net Sales AUC.2017`,`Net Sales AUC Blended.2017`,`Net Sales AUC Mkd.2017`))
+
+#Now we can start adding back those metrics but making sure they are done properly
+joined_data_attributes <- joined_data_attributes %>% mutate(NetSalesAUR.2018 = `Net Sales Amt.2018`/`Net Sales Units.2018`,
+                                                            NetSalesAURBlended.2018 =`Net Sales Amt Blended.2018`/`Net Sales Units Blended.2018`,
+                                                            NetSalesAURMkd.2018 = `Net Sales Amt Mkd.2018`/`Net Sales Units Mkd.2018`,
+                                                            NetSalesAUC.2018 = `Net Sales Cost.2018`/`Net Sales Units.2018`,
+                                                            NetSalesAUCBlended.2018 =`Net Sales Cost Blended.2018`/`Net Sales Units Blended.2018`,
+                                                            NetSalesAUCMkd.2018 = `Net Sales Cost Mkd.2018`/`Net Sales Units Mkd.2018`,
+                                                            NetSalesAUR.2017 = `Net Sales Amt.2017`/`Net Sales Units.2017`,
+                                                            NetSalesAURBlended.2017 =`Net Sales Amt Blended.2017`/`Net Sales Units Blended.2017`,
+                                                            NetSalesAURMkd.2017 = `Net Sales Amt Mkd.2017`/`Net Sales Units Mkd.2017`,
+                                                            NetSalesAUC.2017 = `Net Sales Cost.2017`/`Net Sales Units.2017`,
+                                                            NetSalesAUCBlended.2017 =`Net Sales Cost Blended.2017`/`Net Sales Units Blended.2017`,
+                                                            NetSalesAUCMkd.2017 = `Net Sales Cost Mkd.2017`/`Net Sales Units Mkd.2017`)
+
+#After adding back in the metrics we can start summarizing the data at different levels such as class, subclass, style, and season codes
+
+#First by Class
+summarized_data_class <- joined_data_attributes %>% group_by(Class) %>% summarize(Sales_Amt_2018 =sum(`Net Sales Amt.2018`),Sales_Amt_blended_2018 =sum(`Net Sales Amt Blended.2018`),Sales_Amt_Mkd_2018 =sum(`Net Sales Amt Mkd.2018`),
+                                                                                  GMtotal_2018 =sum(`Net Sales GM$.2018`),GMBlended_2018 =sum(`Net Sales GM$ Blended.2018`),GMMkd_2018 =sum(`Net Sales GM$ Mkd.2018`),
+                                                                                  Net_Sales_Units_2018 =sum(`Net Sales Units.2018`),Net_Sales_Units_Blended_2018 =sum(`Net Sales Units Blended.2018`),Net_Sales_Units_Mkd_2018 =sum(`Net Sales Units Mkd.2018`),
+                                                                                  Net_Sales_Cost_2018 =sum(`Net Sales Cost.2018`),Net_Sales_Cost_Blended_2018 = sum(`Net Sales Cost Blended.2018`),Net_Sales_cost_Mkd_2018 = sum(`Net Sales Cost Mkd.2018`),
+                                                                                  AUR.2018 = (sum(`Net Sales Amt.2018`)/sum(`Net Sales Units.2018`)), AURblended.2018 = (sum(`Net Sales Amt Blended.2018`)/sum(`Net Sales Units Blended.2018`)), AURmkd.2018 = (sum(`Net Sales Amt Mkd.2018`)/sum(`Net Sales Units Mkd.2018`)),
+                                                                                  AUC.2018 = (sum(`Net Sales Cost.2018`)/sum(`Net Sales Units.2018`)), AUCblended.2018 = (sum(`Net Sales Cost Blended.2018`)/sum(`Net Sales Units Blended.2018`)), AUCmkd.2018 = (sum(`Net Sales Cost Mkd.2018`)/sum(`Net Sales Units Mkd.2018`)),
+                                                                                  BOP_Inv_Units_2018 = sum(`Ttl Inv BOP Units.2018`),BOP_Inv_Units_Reg_2018 = sum(`Ttl Inv BOP Units Reg.2018`),BOP_Inv_Units_Mkd_2018 = sum(`Ttl Inv BOP Units Mkd.2018`),
+                                                                                  BOP_Inv_Cost_2018 = sum(`Ttl Inv BOP Cost.2018`),BOP_Inv_Cost_Reg_2018 = sum(`Ttl Inv BOP Cost Reg.2018`),BOP_Inv_Cost_Mkd_2018 = sum(`Ttl Inv BOP Cost Mkd.2018`),
+                                                                                  Avail_units_2018 = sum(`Available Units.2018`),Avail_Units_Blended_2018 = sum(`Available Units Reg.2018`),Avail_Units_Mkd_2018 = sum(`Available Units Mkd.2018`),
+                                                                                  Avail_Cost_2018 = sum(`Available Cost.2018`),Avail_Cost_Reg_2018 = sum(`Available Cost Reg.2018`),Avail_Cost_Mkd_2018 = sum(`Available Cost Mkd.2018`),
+                                                                                  Sales_Amt_2017 = sum(`Net Sales Amt.2017`),Sales_Amt_blended_2017 = sum(`Net Sales Amt Blended.2017`),Sales_Amt_Mkd_2017 = sum(`Net Sales Amt Mkd.2017`),
+                                                                                  GMtotal_2017 = sum(`Net Sales GM$.2017`),GMBlended_2017 = sum(`Net Sales GM$ Blended.2017`),GMMkd_2017 = sum(`Net Sales GM$ Mkd.2017`),
+                                                                                  Net_Sales_Units_2017 = sum(`Net Sales Units.2017`),Net_Sales_Units_Blended_2017 = sum(`Net Sales Units Blended.2017`),Net_Sales_Units_Mkd_2017 = sum(`Net Sales Units Mkd.2017`),
+                                                                                  Net_Sales_Cost_2017 = sum(`Net Sales Cost.2017`),Net_Sales_Cost_Blended_2017 = sum(`Net Sales Cost Blended.2017`),Net_Sales_cost_Mkd_2017 = sum(`Net Sales Cost Mkd.2017`),
+                                                                                  AUR.2017 = (sum(`Net Sales Amt.2017`)/sum(`Net Sales Units.2017`)), AURblended.2017 = (sum(`Net Sales Amt Blended.2017`)/sum(`Net Sales Units Blended.2017`)), AURmkd.2017 = (sum(`Net Sales Amt Mkd.2017`)/sum(`Net Sales Units Mkd.2017`)),
+                                                                                  AUC.2017 = (sum(`Net Sales Cost.2017`)/sum(`Net Sales Units.2017`)), AUCblended.2017 = (sum(`Net Sales Cost Blended.2017`)/sum(`Net Sales Units Blended.2017`)), AUCmkd.2017 = (sum(`Net Sales Cost Mkd.2017`)/sum(`Net Sales Units Mkd.2017`)),
+                                                                                  BOP_Inv_Units_2017 = sum(`Ttl Inv BOP Units.2017`),BOP_Inv_Units_Reg_2017 = sum(`Ttl Inv BOP Units Reg.2017`),BOP_Inv_Units_Mkd_2017 = sum(`Ttl Inv BOP Units Mkd.2017`),
+                                                                                  BOP_Inv_Cost_2017 = sum(`Ttl Inv BOP Cost.2017`),BOP_Inv_Cost_Reg_2017 = sum(`Ttl Inv BOP Cost Reg.2017`),BOP_Inv_Cost_Mkd_2017 = sum(`Ttl Inv BOP Cost Mkd.2017`),
+                                                                                  Avail_units_2017 = sum(`Available Units.2017`),Avail_Units_Blended_2017 = sum(`Available Units Reg.2017`),Avail_Units_Mkd_2017 = sum(`Available Units Mkd.2017`),
+                                                                                  Avail_Cost_2017 = sum(`Available Cost.2017`),Avail_Cost_Reg_2017 = sum(`Available Cost Reg.2017`),Avail_Cost_Mkd_2017 = sum(`Available Cost Mkd.2017`))
+                                                                              
+#Next by Subclass
+summarized_data_subclass <- joined_data_attributes %>% group_by(Class,`Sub-Class`) %>% summarize(Sales_Amt_2018 =sum(`Net Sales Amt.2018`),Sales_Amt_blended_2018 =sum(`Net Sales Amt Blended.2018`),Sales_Amt_Mkd_2018 =sum(`Net Sales Amt Mkd.2018`),
+                                                                                                 GMtotal_2018 =sum(`Net Sales GM$.2018`),GMBlended_2018 =sum(`Net Sales GM$ Blended.2018`),GMMkd_2018 =sum(`Net Sales GM$ Mkd.2018`),
+                                                                                                 Net_Sales_Units_2018 =sum(`Net Sales Units.2018`),Net_Sales_Units_Blended_2018 =sum(`Net Sales Units Blended.2018`),Net_Sales_Units_Mkd_2018 =sum(`Net Sales Units Mkd.2018`),
+                                                                                                 Net_Sales_Cost_2018 =sum(`Net Sales Cost.2018`),Net_Sales_Cost_Blended_2018 = sum(`Net Sales Cost Blended.2018`),Net_Sales_cost_Mkd_2018 = sum(`Net Sales Cost Mkd.2018`),
+                                                                                                 AUR.2018 = (sum(`Net Sales Amt.2018`)/sum(`Net Sales Units.2018`)), AURblended.2018 = (sum(`Net Sales Amt Blended.2018`)/sum(`Net Sales Units Blended.2018`)), AURmkd.2018 = (sum(`Net Sales Amt Mkd.2018`)/sum(`Net Sales Units Mkd.2018`)),
+                                                                                                 AUC.2018 = (sum(`Net Sales Cost.2018`)/sum(`Net Sales Units.2018`)), AUCblended.2018 = (sum(`Net Sales Cost Blended.2018`)/sum(`Net Sales Units Blended.2018`)), AUCmkd.2018 = (sum(`Net Sales Cost Mkd.2018`)/sum(`Net Sales Units Mkd.2018`)),
+                                                                                                 BOP_Inv_Units_2018 = sum(`Ttl Inv BOP Units.2018`),BOP_Inv_Units_Reg_2018 = sum(`Ttl Inv BOP Units Reg.2018`),BOP_Inv_Units_Mkd_2018 = sum(`Ttl Inv BOP Units Mkd.2018`),
+                                                                                                 BOP_Inv_Cost_2018 = sum(`Ttl Inv BOP Cost.2018`),BOP_Inv_Cost_Reg_2018 = sum(`Ttl Inv BOP Cost Reg.2018`),BOP_Inv_Cost_Mkd_2018 = sum(`Ttl Inv BOP Cost Mkd.2018`),
+                                                                                                 Avail_units_2018 = sum(`Available Units.2018`),Avail_Units_Blended_2018 = sum(`Available Units Reg.2018`),Avail_Units_Mkd_2018 = sum(`Available Units Mkd.2018`),
+                                                                                                 Avail_Cost_2018 = sum(`Available Cost.2018`),Avail_Cost_Reg_2018 = sum(`Available Cost Reg.2018`),Avail_Cost_Mkd_2018 = sum(`Available Cost Mkd.2018`),
+                                                                                                 Sales_Amt_2017 = sum(`Net Sales Amt.2017`),Sales_Amt_blended_2017 = sum(`Net Sales Amt Blended.2017`),Sales_Amt_Mkd_2017 = sum(`Net Sales Amt Mkd.2017`),
+                                                                                                 GMtotal_2017 = sum(`Net Sales GM$.2017`),GMBlended_2017 = sum(`Net Sales GM$ Blended.2017`),GMMkd_2017 = sum(`Net Sales GM$ Mkd.2017`),
+                                                                                                 Net_Sales_Units_2017 = sum(`Net Sales Units.2017`),Net_Sales_Units_Blended_2017 = sum(`Net Sales Units Blended.2017`),Net_Sales_Units_Mkd_2017 = sum(`Net Sales Units Mkd.2017`),
+                                                                                                 Net_Sales_Cost_2017 = sum(`Net Sales Cost.2017`),Net_Sales_Cost_Blended_2017 = sum(`Net Sales Cost Blended.2017`),Net_Sales_cost_Mkd_2017 = sum(`Net Sales Cost Mkd.2017`),
+                                                                                                 AUR.2017 = (sum(`Net Sales Amt.2017`)/sum(`Net Sales Units.2017`)), AURblended.2017 = (sum(`Net Sales Amt Blended.2017`)/sum(`Net Sales Units Blended.2017`)), AURmkd.2017 = (sum(`Net Sales Amt Mkd.2017`)/sum(`Net Sales Units Mkd.2017`)),
+                                                                                                 AUC.2017 = (sum(`Net Sales Cost.2017`)/sum(`Net Sales Units.2017`)), AUCblended.2017 = (sum(`Net Sales Cost Blended.2017`)/sum(`Net Sales Units Blended.2017`)), AUCmkd.2017 = (sum(`Net Sales Cost Mkd.2017`)/sum(`Net Sales Units Mkd.2017`)),
+                                                                                                 BOP_Inv_Units_2017 = sum(`Ttl Inv BOP Units.2017`),BOP_Inv_Units_Reg_2017 = sum(`Ttl Inv BOP Units Reg.2017`),BOP_Inv_Units_Mkd_2017 = sum(`Ttl Inv BOP Units Mkd.2017`),
+                                                                                                 BOP_Inv_Cost_2017 = sum(`Ttl Inv BOP Cost.2017`),BOP_Inv_Cost_Reg_2017 = sum(`Ttl Inv BOP Cost Reg.2017`),BOP_Inv_Cost_Mkd_2017 = sum(`Ttl Inv BOP Cost Mkd.2017`),
+                                                                                                 Avail_units_2017 = sum(`Available Units.2017`),Avail_Units_Blended_2017 = sum(`Available Units Reg.2017`),Avail_Units_Mkd_2017 = sum(`Available Units Mkd.2017`),
+                                                                                                 Avail_Cost_2017 = sum(`Available Cost.2017`),Avail_Cost_Reg_2017 = sum(`Available Cost Reg.2017`),Avail_Cost_Mkd_2017 = sum(`Available Cost Mkd.2017`))
+
+                                                                            
+#Next by style
+summarized_data_Style <- joined_data_attributes %>% group_by(Class,`Sub-Class`,Style) %>% summarize(Sales_Amt_2018 =sum(`Net Sales Amt.2018`),Sales_Amt_blended_2018 =sum(`Net Sales Amt Blended.2018`),Sales_Amt_Mkd_2018 =sum(`Net Sales Amt Mkd.2018`),
+                                                                                                    GMtotal_2018 =sum(`Net Sales GM$.2018`),GMBlended_2018 =sum(`Net Sales GM$ Blended.2018`),GMMkd_2018 =sum(`Net Sales GM$ Mkd.2018`),
+                                                                                                    Net_Sales_Units_2018 =sum(`Net Sales Units.2018`),Net_Sales_Units_Blended_2018 =sum(`Net Sales Units Blended.2018`),Net_Sales_Units_Mkd_2018 =sum(`Net Sales Units Mkd.2018`),
+                                                                                                    Net_Sales_Cost_2018 =sum(`Net Sales Cost.2018`),Net_Sales_Cost_Blended_2018 = sum(`Net Sales Cost Blended.2018`),Net_Sales_cost_Mkd_2018 = sum(`Net Sales Cost Mkd.2018`),
+                                                                                                    AUR.2018 = (sum(`Net Sales Amt.2018`)/sum(`Net Sales Units.2018`)), AURblended.2018 = (sum(`Net Sales Amt Blended.2018`)/sum(`Net Sales Units Blended.2018`)), AURmkd.2018 = (sum(`Net Sales Amt Mkd.2018`)/sum(`Net Sales Units Mkd.2018`)),
+                                                                                                    AUC.2018 = (sum(`Net Sales Cost.2018`)/sum(`Net Sales Units.2018`)), AUCblended.2018 = (sum(`Net Sales Cost Blended.2018`)/sum(`Net Sales Units Blended.2018`)), AUCmkd.2018 = (sum(`Net Sales Cost Mkd.2018`)/sum(`Net Sales Units Mkd.2018`)),
+                                                                                                    BOP_Inv_Units_2018 = sum(`Ttl Inv BOP Units.2018`),BOP_Inv_Units_Reg_2018 = sum(`Ttl Inv BOP Units Reg.2018`),BOP_Inv_Units_Mkd_2018 = sum(`Ttl Inv BOP Units Mkd.2018`),
+                                                                                                    BOP_Inv_Cost_2018 = sum(`Ttl Inv BOP Cost.2018`),BOP_Inv_Cost_Reg_2018 = sum(`Ttl Inv BOP Cost Reg.2018`),BOP_Inv_Cost_Mkd_2018 = sum(`Ttl Inv BOP Cost Mkd.2018`),
+                                                                                                    Avail_units_2018 = sum(`Available Units.2018`),Avail_Units_Blended_2018 = sum(`Available Units Reg.2018`),Avail_Units_Mkd_2018 = sum(`Available Units Mkd.2018`),
+                                                                                                    Avail_Cost_2018 = sum(`Available Cost.2018`),Avail_Cost_Reg_2018 = sum(`Available Cost Reg.2018`),Avail_Cost_Mkd_2018 = sum(`Available Cost Mkd.2018`),
+                                                                                                    Sales_Amt_2017 = sum(`Net Sales Amt.2017`),Sales_Amt_blended_2017 = sum(`Net Sales Amt Blended.2017`),Sales_Amt_Mkd_2017 = sum(`Net Sales Amt Mkd.2017`),
+                                                                                                    GMtotal_2017 = sum(`Net Sales GM$.2017`),GMBlended_2017 = sum(`Net Sales GM$ Blended.2017`),GMMkd_2017 = sum(`Net Sales GM$ Mkd.2017`),
+                                                                                                    Net_Sales_Units_2017 = sum(`Net Sales Units.2017`),Net_Sales_Units_Blended_2017 = sum(`Net Sales Units Blended.2017`),Net_Sales_Units_Mkd_2017 = sum(`Net Sales Units Mkd.2017`),
+                                                                                                    Net_Sales_Cost_2017 = sum(`Net Sales Cost.2017`),Net_Sales_Cost_Blended_2017 = sum(`Net Sales Cost Blended.2017`),Net_Sales_cost_Mkd_2017 = sum(`Net Sales Cost Mkd.2017`),
+                                                                                                    AUR.2017 = (sum(`Net Sales Amt.2017`)/sum(`Net Sales Units.2017`)), AURblended.2017 = (sum(`Net Sales Amt Blended.2017`)/sum(`Net Sales Units Blended.2017`)), AURmkd.2017 = (sum(`Net Sales Amt Mkd.2017`)/sum(`Net Sales Units Mkd.2017`)),
+                                                                                                    AUC.2017 = (sum(`Net Sales Cost.2017`)/sum(`Net Sales Units.2017`)), AUCblended.2017 = (sum(`Net Sales Cost Blended.2017`)/sum(`Net Sales Units Blended.2017`)), AUCmkd.2017 = (sum(`Net Sales Cost Mkd.2017`)/sum(`Net Sales Units Mkd.2017`)),
+                                                                                                    BOP_Inv_Units_2017 = sum(`Ttl Inv BOP Units.2017`),BOP_Inv_Units_Reg_2017 = sum(`Ttl Inv BOP Units Reg.2017`),BOP_Inv_Units_Mkd_2017 = sum(`Ttl Inv BOP Units Mkd.2017`),
+                                                                                                    BOP_Inv_Cost_2017 = sum(`Ttl Inv BOP Cost.2017`),BOP_Inv_Cost_Reg_2017 = sum(`Ttl Inv BOP Cost Reg.2017`),BOP_Inv_Cost_Mkd_2017 = sum(`Ttl Inv BOP Cost Mkd.2017`),
+                                                                                                    Avail_units_2017 = sum(`Available Units.2017`),Avail_Units_Blended_2017 = sum(`Available Units Reg.2017`),Avail_Units_Mkd_2017 = sum(`Available Units Mkd.2017`),
+                                                                                                    Avail_Cost_2017 = sum(`Available Cost.2017`),Avail_Cost_Reg_2017 = sum(`Available Cost Reg.2017`),Avail_Cost_Mkd_2017 = sum(`Available Cost Mkd.2017`))
+
+#you can also combine levels to look at season codes within each class, but to do so we have to do it separately 
+#for each year due to their being discrepancies in the season codes for each year, we can try to recombine to see if that will work
+summarized_data_class_season_2018 <- joined_data_attributes %>% group_by(Class,`Season Code.2018`) %>% summarize(Sales_Amt_2018 =sum(`Net Sales Amt.2018`),Sales_Amt_blended_2018 =sum(`Net Sales Amt Blended.2018`),Sales_Amt_Mkd_2018 =sum(`Net Sales Amt Mkd.2018`),
+                                                                                                                 GMtotal_2018 =sum(`Net Sales GM$.2018`),GMBlended_2018 =sum(`Net Sales GM$ Blended.2018`),GMMkd_2018 =sum(`Net Sales GM$ Mkd.2018`),
+                                                                                                                 Net_Sales_Units_2018 =sum(`Net Sales Units.2018`),Net_Sales_Units_Blended_2018 =sum(`Net Sales Units Blended.2018`),Net_Sales_Units_Mkd_2018 =sum(`Net Sales Units Mkd.2018`),
+                                                                                                                 Net_Sales_Cost_2018 =sum(`Net Sales Cost.2018`),Net_Sales_Cost_Blended_2018 = sum(`Net Sales Cost Blended.2018`),Net_Sales_cost_Mkd_2018 = sum(`Net Sales Cost Mkd.2018`),
+                                                                                                                 AUR.2018 = (sum(`Net Sales Amt.2018`)/sum(`Net Sales Units.2018`)), AURblended.2018 = (sum(`Net Sales Amt Blended.2018`)/sum(`Net Sales Units Blended.2018`)), AURmkd.2018 = (sum(`Net Sales Amt Mkd.2018`)/sum(`Net Sales Units Mkd.2018`)),
+                                                                                                                 AUC.2018 = (sum(`Net Sales Cost.2018`)/sum(`Net Sales Units.2018`)), AUCblended.2018 = (sum(`Net Sales Cost Blended.2018`)/sum(`Net Sales Units Blended.2018`)), AUCmkd.2018 = (sum(`Net Sales Cost Mkd.2018`)/sum(`Net Sales Units Mkd.2018`)),
+                                                                                                                 BOP_Inv_Units_2018 = sum(`Ttl Inv BOP Units.2018`),BOP_Inv_Units_Reg_2018 = sum(`Ttl Inv BOP Units Reg.2018`),BOP_Inv_Units_Mkd_2018 = sum(`Ttl Inv BOP Units Mkd.2018`),
+                                                                                                                 BOP_Inv_Cost_2018 = sum(`Ttl Inv BOP Cost.2018`),BOP_Inv_Cost_Reg_2018 = sum(`Ttl Inv BOP Cost Reg.2018`),BOP_Inv_Cost_Mkd_2018 = sum(`Ttl Inv BOP Cost Mkd.2018`),
+                                                                                                                 Avail_units_2018 = sum(`Available Units.2018`),Avail_Units_Blended_2018 = sum(`Available Units Reg.2018`),Avail_Units_Mkd_2018 = sum(`Available Units Mkd.2018`),
+                                                                                                                 Avail_Cost_2018 = sum(`Available Cost.2018`),Avail_Cost_Reg_2018 = sum(`Available Cost Reg.2018`),Avail_Cost_Mkd_2018 = sum(`Available Cost Mkd.2018`))
+ 
+                                                                                                                                                                                                                                 
+summarized_data_class_season_2017 <- joined_data_attributes %>% group_by(Class,`Season Code.2017`) %>% summarize(Sales_Amt_2017 = sum(`Net Sales Amt.2017`), Sales_Amt_blended_2017 = sum(`Net Sales Amt Blended.2017`),Sales_Amt_Mkd_2017 = sum(`Net Sales Amt Mkd.2017`),
+                                                                                                        GMtotal_2017 = sum(`Net Sales GM$.2017`),GMBlended_2017 = sum(`Net Sales GM$ Blended.2017`),GMMkd_2017 = sum(`Net Sales GM$ Mkd.2017`),
+                                                                                                        Net_Sales_Units_2017 = sum(`Net Sales Units.2017`),Net_Sales_Units_Blended_2017 = sum(`Net Sales Units Blended.2017`),Net_Sales_Units_Mkd_2017 = sum(`Net Sales Units Mkd.2017`),
+                                                                                                        Net_Sales_Cost_2017 = sum(`Net Sales Cost.2017`),Net_Sales_Cost_Blended_2017 = sum(`Net Sales Cost Blended.2017`),Net_Sales_cost_Mkd_2017 = sum(`Net Sales Cost Mkd.2017`),
+                                                                                                        AUR.2017 = (sum(`Net Sales Amt.2017`)/sum(`Net Sales Units.2017`)), AURblended.2017 = (sum(`Net Sales Amt Blended.2017`)/sum(`Net Sales Units Blended.2017`)), AURmkd.2017 = (sum(`Net Sales Amt Mkd.2017`)/sum(`Net Sales Units Mkd.2017`)),
+                                                                                                        AUC.2017 = (sum(`Net Sales Cost.2017`)/sum(`Net Sales Units.2017`)), AUCblended.2017 = (sum(`Net Sales Cost Blended.2017`)/sum(`Net Sales Units Blended.2017`)), AUCmkd.2017 = (sum(`Net Sales Cost Mkd.2017`)/sum(`Net Sales Units Mkd.2017`)),
+                                                                                                        BOP_Inv_Units_2017 = sum(`Ttl Inv BOP Units.2017`),BOP_Inv_Units_Reg_2017 = sum(`Ttl Inv BOP Units Reg.2017`),BOP_Inv_Units_Mkd_2017 = sum(`Ttl Inv BOP Units Mkd.2017`),
+                                                                                                        BOP_Inv_Cost_2017 = sum(`Ttl Inv BOP Cost.2017`),BOP_Inv_Cost_Reg_2017 = sum(`Ttl Inv BOP Cost Reg.2017`),BOP_Inv_Cost_Mkd_2017 = sum(`Ttl Inv BOP Cost Mkd.2017`),
+                                                                                                        Avail_units_2017 = sum(`Available Units.2017`),Avail_Units_Blended_2017 = sum(`Available Units Reg.2017`),Avail_Units_Mkd_2017 = sum(`Available Units Mkd.2017`),
+                                                                                                        Avail_Cost_2017 = sum(`Available Cost.2017`),Avail_Cost_Reg_2017 = sum(`Available Cost Reg.2017`),Avail_Cost_Mkd_2017 = sum(`Available Cost Mkd.2017`))                                                                               
+
+summarized_data_class_season <- summarized_data_class_season_2018 %>% left_join(x = summarized_data_class_season_2018,y = summarized_data_class_season_2017,
+                                                                                 by = c("Class","Season Code.2018" = "Season Code.2017"))
+summarized_data_class_season[is.na(summarized_data_class_season)] <- 0
+
+# You could do the same thing for subclass, but only if you really need that level of detail
+summarized_data_subclass_season_2018 <- joined_data_attributes %>% group_by(Class,`Sub-Class`,`Season Code.2018`) %>% summarize(Sales_Amt_2018 = sum(`Net Sales Amt.2018`),Sales_Amt_blended_2018 = sum(`Net Sales Amt Blended.2018`),Sales_Amt_Mkd_2018 = sum(`Net Sales Amt Mkd.2018`),
+                                                                                                                               GMtotal_2018 = sum(`Net Sales GM$.2018`),GMBlended_2018 = sum(`Net Sales GM$ Blended.2018`),GMMkd_2018 = sum(`Net Sales GM$ Mkd.2018`),
+                                                                                                                               Net_Sales_Units_2018 = sum(`Net Sales Units.2018`),Net_Sales_Units_Blended_2018 = sum(`Net Sales Units Blended.2018`),Net_Sales_Units_Mkd_2018 = sum(`Net Sales Units Mkd.2018`),
+                                                                                                                               Net_Sales_Cost_2018 = sum(`Net Sales Cost.2018`),Net_Sales_Cost_Blended_2018 = sum(`Net Sales Cost Blended.2018`),Net_Sales_cost_Mkd_2018 = sum(`Net Sales Cost Mkd.2018`),
+                                                                                                                               AUR.2018 = (sum(`Net Sales Amt.2018`)/sum(`Net Sales Units.2018`)), AURblended.2018 = (sum(`Net Sales Amt Blended.2018`)/sum(`Net Sales Units Blended.2018`)), AURmkd.2018 = (sum(`Net Sales Amt Mkd.2018`)/sum(`Net Sales Units Mkd.2018`)),
+                                                                                                                               AUC.2018 = (sum(`Net Sales Cost.2018`)/sum(`Net Sales Units.2018`)), AUCblended.2018 = (sum(`Net Sales Cost Blended.2018`)/sum(`Net Sales Units Blended.2018`)), AUCmkd.2018 = (sum(`Net Sales Cost Mkd.2018`)/sum(`Net Sales Units Mkd.2018`)),
+                                                                                                                               BOP_Inv_Units_2018 = sum(`Ttl Inv BOP Units.2018`),BOP_Inv_Units_Reg_2018 = sum(`Ttl Inv BOP Units Reg.2018`),BOP_Inv_Units_Mkd_2018 = sum(`Ttl Inv BOP Units Mkd.2018`),
+                                                                                                                               BOP_Inv_Cost_2018 = sum(`Ttl Inv BOP Cost.2018`),BOP_Inv_Cost_Reg_2018 = sum(`Ttl Inv BOP Cost Reg.2018`),BOP_Inv_Cost_Mkd_2018 = sum(`Ttl Inv BOP Cost Mkd.2018`),
+                                                                                                                               Avail_units_2018 = sum(`Available Units.2018`),Avail_Units_Blended_2018 = sum(`Available Units Reg.2018`),Avail_Units_Mkd_2018 = sum(`Available Units Mkd.2018`))
+ 
+                                                                                                                                                                                                                                                             
+summarized_data_subclass_season_2017 <- joined_data_attributes %>% group_by(Class,`Sub-Class`,`Season Code.2017`) %>% summarize(Sales_Amt_2017 = sum(`Net Sales Amt.2017`),Sales_Amt_blended_2017 = sum(`Net Sales Amt Blended.2017`),Sales_Amt_Mkd_2017 = sum(`Net Sales Amt Mkd.2017`),
+                                                                                                                                GMtotal_2017 = sum(`Net Sales GM$.2017`),GMBlended_2017 = sum(`Net Sales GM$ Blended.2017`),GMMkd_2017 = sum(`Net Sales GM$ Mkd.2017`),
+                                                                                                                                Net_Sales_Units_2017 = sum(`Net Sales Units.2017`),Net_Sales_Units_Blended_2017 = sum(`Net Sales Units Blended.2017`),Net_Sales_Units_Mkd_2017 = sum(`Net Sales Units Mkd.2017`),
+                                                                                                                                Net_Sales_Cost_2017 = sum(`Net Sales Cost.2017`),Net_Sales_Cost_Blended_2017 = sum(`Net Sales Cost Blended.2017`),Net_Sales_cost_Mkd_2017 = sum(`Net Sales Cost Mkd.2017`),
+                                                                                                                                AUR.2017 = (sum(`Net Sales Amt.2017`)/sum(`Net Sales Units.2017`)), AURblended.2017 = (sum(`Net Sales Amt Blended.2017`)/sum(`Net Sales Units Blended.2017`)), AURmkd.2017 = (sum(`Net Sales Amt Mkd.2017`)/sum(`Net Sales Units Mkd.2017`)),
+                                                                                                                                AUC.2017 = (sum(`Net Sales Cost.2017`)/sum(`Net Sales Units.2017`)), AUCblended.2017 = (sum(`Net Sales Cost Blended.2017`)/sum(`Net Sales Units Blended.2017`)), AUCmkd.2017 = (sum(`Net Sales Cost Mkd.2017`)/sum(`Net Sales Units Mkd.2017`)),
+                                                                                                                                BOP_Inv_Units_2017 = sum(`Ttl Inv BOP Units.2017`),BOP_Inv_Units_Reg_2017 = sum(`Ttl Inv BOP Units Reg.2017`),BOP_Inv_Units_Mkd_2017 = sum(`Ttl Inv BOP Units Mkd.2017`),
+                                                                                                                                BOP_Inv_Cost_2017 = sum(`Ttl Inv BOP Cost.2017`),BOP_Inv_Cost_Reg_2017 = sum(`Ttl Inv BOP Cost Reg.2017`),BOP_Inv_Cost_Mkd_2017 = sum(`Ttl Inv BOP Cost Mkd.2017`),
+                                                                                                                                Avail_units_2017 = sum(`Available Units.2017`),Avail_Units_Blended_2017 = sum(`Available Units Reg.2017`),Avail_Units_Mkd_2017 = sum(`Available Units Mkd.2017`),
+                                                                                                                                Avail_Cost_2017 = sum(`Available Cost.2017`),Avail_Cost_Reg_2017 = sum(`Available Cost Reg.2017`),Avail_Cost_Mkd_2017 = sum(`Available Cost Mkd.2017`))                                                                                  
+
+summarized_data_subclass_season <- summarized_data_subclass_season_2018 %>% left_join(x = summarized_data_subclass_season_2018,y = summarized_data_subclass_season_2017,
+                                                                                by = c("Class","Sub-Class","Season Code.2018" = "Season Code.2017"))
+summarized_data_subclass_season[is.na(summarized_data_subclass_season)] <- 0
+
+#We can also use the fact that we have both 2017 and 2018 data to build out comp information that can be applied to the same levels we did above!
+summarized_data_class_comps <- joined_data_attributes %>% group_by(Class) %>% summarize(NetSalesComp = (sum(`Net Sales Amt.2018`)/sum(`Net Sales Amt.2017`))-1,NetSalesCompBlended = (sum(`Net Sales Amt Blended.2018`)/sum(`Net Sales Amt Blended.2017`))-1,
+                                                                                  NetSalesMkdComp = (sum(`Net Sales Amt Mkd.2018`)/sum(`Net Sales Amt Mkd.2017`))-1,GMcomp = (sum(`Net Sales GM$.2018`)/sum(`Net Sales GM$.2017`))-1,
+                                                                                  GMBlendedComp = (sum(`Net Sales GM$ Blended.2018`)/sum(`Net Sales GM$ Blended.2017`)-1), GMMkdComp = (sum(`Net Sales GM$ Mkd.2018`)/sum(`Net Sales GM$ Mkd.2017`))-1,
+                                                                                  UnitsComp = (sum(`Net Sales Units.2018`)/sum(`Net Sales Units.2017`))-1,BlendedUnitsComp = (sum(`Net Sales Units Blended.2018`)/sum(`Net Sales Units Blended.2017`))-1,
+                                                                                  MkdUnitsComp = (sum(`Net Sales Units Mkd.2018`)/sum(`Net Sales Units Mkd.2017`))-1,SalesCostComp = (sum(`Net Sales Cost.2018`)/sum(`Net Sales Cost.2017`))-1,
+                                                                                  SalesCostBlendedComp = (sum(`Net Sales Cost Blended.2018`)/sum(`Net Sales Cost Blended.2017`))-1, SalesCostMkd = (sum(`Net Sales Cost Mkd.2018`)/sum(`Net Sales Cost Mkd.2017`))-1,
+                                                                                  AURComp = ((sum(`Net Sales Amt.2018`)/sum(`Net Sales Units.2018`))/(sum(`Net Sales Amt.2017`)/sum(`Net Sales Units.2017`)))-1, AURblendedComp = ((sum(`Net Sales Amt Blended.2018`)/sum(`Net Sales Units Blended.2018`))/(sum(`Net Sales Amt Blended.2017`)/sum(`Net Sales Units Blended.2017`)))-1,
+                                                                                  AURmkdComp = ((sum(`Net Sales Amt Mkd.2018`)/sum(`Net Sales Units Mkd.2018`))/ (sum(`Net Sales Amt Mkd.2017`)/sum(`Net Sales Units Mkd.2017`)))-1, AUC_Comp = ((sum(`Net Sales Cost.2018`)/sum(`Net Sales Units.2018`))/(sum(`Net Sales Cost.2017`)/sum(`Net Sales Units.2017`)))-1,
+                                                                                  AUCblendedComp = ((sum(`Net Sales Cost Blended.2018`)/sum(`Net Sales Units Blended.2018`))/(sum(`Net Sales Cost Blended.2017`)/sum(`Net Sales Units Blended.2017`)))-1, AUCMkdComp = ((sum(`Net Sales Cost Mkd.2018`)/sum(`Net Sales Units Mkd.2018`))/(sum(`Net Sales Cost Mkd.2017`)/sum(`Net Sales Units Mkd.2017`)))-1,
+                                                                                  BOPUnitsComp = (sum(`Ttl Inv BOP Units.2018`)/sum(`Ttl Inv BOP Units.2017`))-1, BOPRegUnitsComp = (sum(`Ttl Inv BOP Units Reg.2018`)/sum(`Ttl Inv BOP Units Reg.2017`))-1,BOPMkdUnitsComp = (sum(`Ttl Inv BOP Units Mkd.2018`)/sum(`Ttl Inv BOP Units Mkd.2017`))-1,
+                                                                                  BOPCostComp = (sum(`Ttl Inv BOP Cost.2018`)/sum(`Ttl Inv BOP Cost.2017`))-1, BOPRegCostCop = (sum(`Ttl Inv BOP Cost Reg.2018`)/sum(`Ttl Inv BOP Cost Reg.2017`))-1,
+                                                                                  BOPMkdCostComp = (sum(`Ttl Inv BOP Cost Mkd.2018`)/sum(`Ttl Inv BOP Cost Mkd.2017`))-1, AvailUnitsComp = (sum(`Available Units.2018`)/ sum(`Available Units.2017`))-1,
+                                                                                  AvailRegUnitsComp = (sum(`Available Units Reg.2018`)/sum(`Available Units Reg.2017`))-1,AvailMkdUnitsComp = (sum(`Available Units Mkd.2018`)/sum(`Available Units Mkd.2017`))-1,
+                                                                                  AvailCostComp = (sum(`Available Cost.2018`)/sum(`Available Cost.2017`))-1,AvailRegCostComp = (sum(`Available Cost Reg.2018`)/sum(`Available Cost Reg.2017`))-1,
+                                                                                  AvailMkdCostComp = (sum(`Available Cost Mkd.2018`)/sum(`Available Cost Mkd.2017`))-1)
+                                                                                  
+                                                                                  
+summarized_data_subclass_comps <- joined_data_attributes %>% group_by(Class,`Sub-Class`) %>% summarize(NetSalesComp = (sum(`Net Sales Amt.2018`)/sum(`Net Sales Amt.2017`))-1,NetSalesCompBlended = (sum(`Net Sales Amt Blended.2018`)/sum(`Net Sales Amt Blended.2017`))-1,
+                                                                                        NetSalesMkdComp = (sum(`Net Sales Amt Mkd.2018`)/sum(`Net Sales Amt Mkd.2017`))-1,GMcomp = (sum(`Net Sales GM$.2018`)/sum(`Net Sales GM$.2017`))-1,
+                                                                                        GMBlendedComp = (sum(`Net Sales GM$ Blended.2018`)/sum(`Net Sales GM$ Blended.2017`)-1), GMMkdComp = (sum(`Net Sales GM$ Mkd.2018`)/sum(`Net Sales GM$ Mkd.2017`))-1,
+                                                                                        UnitsComp = (sum(`Net Sales Units.2018`)/sum(`Net Sales Units.2017`))-1,BlendedUnitsComp = (sum(`Net Sales Units Blended.2018`)/sum(`Net Sales Units Blended.2017`))-1,
+                                                                                        MkdUnitsComp = (sum(`Net Sales Units Mkd.2018`)/sum(`Net Sales Units Mkd.2017`))-1,SalesCostComp = (sum(`Net Sales Cost.2018`)/sum(`Net Sales Cost.2017`))-1,
+                                                                                        SalesCostBlendedComp = (sum(`Net Sales Cost Blended.2018`)/sum(`Net Sales Cost Blended.2017`))-1, SalesCostMkd = (sum(`Net Sales Cost Mkd.2018`)/sum(`Net Sales Cost Mkd.2017`))-1,
+                                                                                        AURComp = ((sum(`Net Sales Amt.2018`)/sum(`Net Sales Units.2018`))/(sum(`Net Sales Amt.2017`)/sum(`Net Sales Units.2017`)))-1, AURblendedComp = ((sum(`Net Sales Amt Blended.2018`)/sum(`Net Sales Units Blended.2018`))/(sum(`Net Sales Amt Blended.2017`)/sum(`Net Sales Units Blended.2017`)))-1,
+                                                                                        AURmkdComp = ((sum(`Net Sales Amt Mkd.2018`)/sum(`Net Sales Units Mkd.2018`))/ (sum(`Net Sales Amt Mkd.2017`)/sum(`Net Sales Units Mkd.2017`)))-1, AUC_Comp = ((sum(`Net Sales Cost.2018`)/sum(`Net Sales Units.2018`))/(sum(`Net Sales Cost.2017`)/sum(`Net Sales Units.2017`)))-1,
+                                                                                        AUCblendedComp = ((sum(`Net Sales Cost Blended.2018`)/sum(`Net Sales Units Blended.2018`))/(sum(`Net Sales Cost Blended.2017`)/sum(`Net Sales Units Blended.2017`)))-1, AUCMkdComp = ((sum(`Net Sales Cost Mkd.2018`)/sum(`Net Sales Units Mkd.2018`))/(sum(`Net Sales Cost Mkd.2017`)/sum(`Net Sales Units Mkd.2017`)))-1,
+                                                                                        BOPUnitsComp = (sum(`Ttl Inv BOP Units.2018`)/sum(`Ttl Inv BOP Units.2017`))-1, BOPRegUnitsComp = (sum(`Ttl Inv BOP Units Reg.2018`)/sum(`Ttl Inv BOP Units Reg.2017`))-1,BOPMkdUnitsComp = (sum(`Ttl Inv BOP Units Mkd.2018`)/sum(`Ttl Inv BOP Units Mkd.2017`))-1,
+                                                                                        BOPCostComp = (sum(`Ttl Inv BOP Cost.2018`)/sum(`Ttl Inv BOP Cost.2017`))-1, BOPRegCostCop = (sum(`Ttl Inv BOP Cost Reg.2018`)/sum(`Ttl Inv BOP Cost Reg.2017`))-1,
+                                                                                        BOPMkdCostComp = (sum(`Ttl Inv BOP Cost Mkd.2018`)/sum(`Ttl Inv BOP Cost Mkd.2017`))-1, AvailUnitsComp = (sum(`Available Units.2018`)/ sum(`Available Units.2017`))-1,
+                                                                                        AvailRegUnitsComp = (sum(`Available Units Reg.2018`)/sum(`Available Units Reg.2017`))-1,AvailMkdUnitsComp = (sum(`Available Units Mkd.2018`)/sum(`Available Units Mkd.2017`))-1,
+                                                                                        AvailCostComp = (sum(`Available Cost.2018`)/sum(`Available Cost.2017`))-1,AvailRegCostComp = (sum(`Available Cost Reg.2018`)/sum(`Available Cost Reg.2017`))-1,
+                                                                                        AvailMkdCostComp = (sum(`Available Cost Mkd.2018`)/sum(`Available Cost Mkd.2017`))-1)
+
+#For season Codes
+
+summarized_data_class_season_comps <- summarized_data_class_season %>% summarize(NetSalesComp = (sum(`Net Sales Amt.2018`)/sum(`Net Sales Amt.2017`))-1,NetSalesCompBlended = (sum(`Net Sales Amt Blended.2018`)/sum(`Net Sales Amt Blended.2017`))-1,
+                                                                                        NetSalesMkdComp = (sum(`Net Sales Amt Mkd.2018`)/sum(`Net Sales Amt Mkd.2017`))-1,GMcomp = (sum(`Net Sales GM$.2018`)/sum(`Net Sales GM$.2017`))-1,
+                                                                                        GMBlendedComp = (sum(`Net Sales GM$ Blended.2018`)/sum(`Net Sales GM$ Blended.2017`)-1), GMMkdComp = (sum(`Net Sales GM$ Mkd.2018`)/sum(`Net Sales GM$ Mkd.2017`))-1,
+                                                                                        UnitsComp = (sum(`Net Sales Units.2018`)/sum(`Net Sales Units.2017`))-1,BlendedUnitsComp = (sum(`Net Sales Units Blended.2018`)/sum(`Net Sales Units Blended.2017`))-1,
+                                                                                        MkdUnitsComp = (sum(`Net Sales Units Mkd.2018`)/sum(`Net Sales Units Mkd.2017`))-1,SalesCostComp = (sum(`Net Sales Cost.2018`)/sum(`Net Sales Cost.2017`))-1,
+                                                                                        SalesCostBlendedComp = (sum(`Net Sales Cost Blended.2018`)/sum(`Net Sales Cost Blended.2017`))-1, SalesCostMkd = (sum(`Net Sales Cost Mkd.2018`)/sum(`Net Sales Cost Mkd.2017`))-1,
+                                                                                        AURComp = ((sum(`Net Sales Amt.2018`)/sum(`Net Sales Units.2018`))/(sum(`Net Sales Amt.2017`)/sum(`Net Sales Units.2017`)))-1, AURblendedComp = ((sum(`Net Sales Amt Blended.2018`)/sum(`Net Sales Units Blended.2018`))/(sum(`Net Sales Amt Blended.2017`)/sum(`Net Sales Units Blended.2017`)))-1,
+                                                                                        AURmkdComp = ((sum(`Net Sales Amt Mkd.2018`)/sum(`Net Sales Units Mkd.2018`))/ (sum(`Net Sales Amt Mkd.2017`)/sum(`Net Sales Units Mkd.2017`)))-1, AUC_Comp = ((sum(`Net Sales Cost.2018`)/sum(`Net Sales Units.2018`))/(sum(`Net Sales Cost.2017`)/sum(`Net Sales Units.2017`)))-1,
+                                                                                        AUCblendedComp = ((sum(`Net Sales Cost Blended.2018`)/sum(`Net Sales Units Blended.2018`))/(sum(`Net Sales Cost Blended.2017`)/sum(`Net Sales Units Blended.2017`)))-1, AUCMkdComp = ((sum(`Net Sales Cost Mkd.2018`)/sum(`Net Sales Units Mkd.2018`))/(sum(`Net Sales Cost Mkd.2017`)/sum(`Net Sales Units Mkd.2017`)))-1,
+                                                                                        BOPUnitsComp = (sum(`Ttl Inv BOP Units.2018`)/sum(`Ttl Inv BOP Units.2017`))-1, BOPRegUnitsComp = (sum(`Ttl Inv BOP Units Reg.2018`)/sum(`Ttl Inv BOP Units Reg.2017`))-1,BOPMkdUnitsComp = (sum(`Ttl Inv BOP Units Mkd.2018`)/sum(`Ttl Inv BOP Units Mkd.2017`))-1,
+                                                                                        BOPCostComp = (sum(`Ttl Inv BOP Cost.2018`)/sum(`Ttl Inv BOP Cost.2017`))-1, BOPRegCostCop = (sum(`Ttl Inv BOP Cost Reg.2018`)/sum(`Ttl Inv BOP Cost Reg.2017`))-1,
+                                                                                        BOPMkdCostComp = (sum(`Ttl Inv BOP Cost Mkd.2018`)/sum(`Ttl Inv BOP Cost Mkd.2017`))-1, AvailUnitsComp = (sum(`Available Units.2018`)/ sum(`Available Units.2017`))-1,
+                                                                                        AvailRegUnitsComp = (sum(`Available Units Reg.2018`)/sum(`Available Units Reg.2017`))-1,AvailMkdUnitsComp = (sum(`Available Units Mkd.2018`)/sum(`Available Units Mkd.2017`))-1,
+                                                                                        AvailCostComp = (sum(`Available Cost.2018`)/sum(`Available Cost.2017`))-1,AvailRegCostComp = (sum(`Available Cost Reg.2018`)/sum(`Available Cost Reg.2017`))-1,
+                                                                                        AvailMkdCostComp = (sum(`Available Cost Mkd.2018`)/sum(`Available Cost Mkd.2017`))-1)
+
+summarized_data_subclass_season_comps <- joined_data_attributes %>% group_by(Class,`Sub-Class`) %>% summarize(NetSalesComp = (sum(`Net Sales Amt.2018`)/sum(`Net Sales Amt.2017`))-1,NetSalesCompBlended = (sum(`Net Sales Amt Blended.2018`)/sum(`Net Sales Amt Blended.2017`))-1,
+                                                                                               NetSalesMkdComp = (sum(`Net Sales Amt Mkd.2018`)/sum(`Net Sales Amt Mkd.2017`))-1,GMcomp = (sum(`Net Sales GM$.2018`)/sum(`Net Sales GM$.2017`))-1,
+                                                                                               GMBlendedComp = (sum(`Net Sales GM$ Blended.2018`)/sum(`Net Sales GM$ Blended.2017`)-1), GMMkdComp = (sum(`Net Sales GM$ Mkd.2018`)/sum(`Net Sales GM$ Mkd.2017`))-1,
+                                                                                               UnitsComp = (sum(`Net Sales Units.2018`)/sum(`Net Sales Units.2017`))-1,BlendedUnitsComp = (sum(`Net Sales Units Blended.2018`)/sum(`Net Sales Units Blended.2017`))-1,
+                                                                                               MkdUnitsComp = (sum(`Net Sales Units Mkd.2018`)/sum(`Net Sales Units Mkd.2017`))-1,SalesCostComp = (sum(`Net Sales Cost.2018`)/sum(`Net Sales Cost.2017`))-1,
+                                                                                               SalesCostBlendedComp = (sum(`Net Sales Cost Blended.2018`)/sum(`Net Sales Cost Blended.2017`))-1, SalesCostMkd = (sum(`Net Sales Cost Mkd.2018`)/sum(`Net Sales Cost Mkd.2017`))-1,
+                                                                                               AURComp = ((sum(`Net Sales Amt.2018`)/sum(`Net Sales Units.2018`))/(sum(`Net Sales Amt.2017`)/sum(`Net Sales Units.2017`)))-1, AURblendedComp = ((sum(`Net Sales Amt Blended.2018`)/sum(`Net Sales Units Blended.2018`))/(sum(`Net Sales Amt Blended.2017`)/sum(`Net Sales Units Blended.2017`)))-1,
+                                                                                               AURmkdComp = ((sum(`Net Sales Amt Mkd.2018`)/sum(`Net Sales Units Mkd.2018`))/ (sum(`Net Sales Amt Mkd.2017`)/sum(`Net Sales Units Mkd.2017`)))-1, AUC_Comp = ((sum(`Net Sales Cost.2018`)/sum(`Net Sales Units.2018`))/(sum(`Net Sales Cost.2017`)/sum(`Net Sales Units.2017`)))-1,
+                                                                                               AUCblendedComp = ((sum(`Net Sales Cost Blended.2018`)/sum(`Net Sales Units Blended.2018`))/(sum(`Net Sales Cost Blended.2017`)/sum(`Net Sales Units Blended.2017`)))-1, AUCMkdComp = ((sum(`Net Sales Cost Mkd.2018`)/sum(`Net Sales Units Mkd.2018`))/(sum(`Net Sales Cost Mkd.2017`)/sum(`Net Sales Units Mkd.2017`)))-1,
+                                                                                               BOPUnitsComp = (sum(`Ttl Inv BOP Units.2018`)/sum(`Ttl Inv BOP Units.2017`))-1, BOPRegUnitsComp = (sum(`Ttl Inv BOP Units Reg.2018`)/sum(`Ttl Inv BOP Units Reg.2017`))-1,BOPMkdUnitsComp = (sum(`Ttl Inv BOP Units Mkd.2018`)/sum(`Ttl Inv BOP Units Mkd.2017`))-1,
+                                                                                               BOPCostComp = (sum(`Ttl Inv BOP Cost.2018`)/sum(`Ttl Inv BOP Cost.2017`))-1, BOPRegCostCop = (sum(`Ttl Inv BOP Cost Reg.2018`)/sum(`Ttl Inv BOP Cost Reg.2017`))-1,
+                                                                                               BOPMkdCostComp = (sum(`Ttl Inv BOP Cost Mkd.2018`)/sum(`Ttl Inv BOP Cost Mkd.2017`))-1, AvailUnitsComp = (sum(`Available Units.2018`)/ sum(`Available Units.2017`))-1,
+                                                                                               AvailRegUnitsComp = (sum(`Available Units Reg.2018`)/sum(`Available Units Reg.2017`))-1,AvailMkdUnitsComp = (sum(`Available Units Mkd.2018`)/sum(`Available Units Mkd.2017`))-1,
+                                                                                               AvailCostComp = (sum(`Available Cost.2018`)/sum(`Available Cost.2017`))-1,AvailRegCostComp = (sum(`Available Cost Reg.2018`)/sum(`Available Cost Reg.2017`))-1,
+                                                                                               AvailMkdCostComp = (sum(`Available Cost Mkd.2018`)/sum(`Available Cost Mkd.2017`))-1)
+
+#Once we have any dataframe that we need, we can write it out as an excel file to do further analysis or present it in a cleaner way.                                                                                  
+joined_data_attributes <- as.data.frame(joined_data_attributes)
+summarized_data_class <- as.data.frame(summarized_data_class)
+summarized_data_subclass <- as.data.frame(summarized_data_subclass)
+summarized_data_class_season <- as.data.frame(summarized_data_class_season)
+summarized_data_subclass_season <- as.data.frame(summarized_data_subclass_season)
+summarized_data_class_comps <- as.data.frame(summarized_data_class_comps)
+summarized_data_subclass_comps <- as.data.frame(summarized_data_subclass_comps)
+install.packages("xlsx")
+library(xlsx)                                                                                  
+
+#We are going to create and format the workbook right in R so that when the file is written it is already formatted
+
+wb<-createWorkbook(type="xlsx")
+
+#This section defines what the style is going to look like for the Title, Subtitle, row names, and column names
+TITLE_STYLE <- CellStyle(wb)+ Font(wb,  heightInPoints=18, 
+                                   color="blue", isBold=TRUE, underline=1)
+SUB_TITLE_STYLE <- CellStyle(wb) + Font(wb,  heightInPoints=14, 
+       isItalic=FALSE, isBold=TRUE)
+# Styles for the data table row/column names
+TABLE_COLNAMES_STYLE <- CellStyle(wb) + Font(wb, isBold=TRUE) +
+  Alignment(wrapText=TRUE, horizontal="ALIGN_CENTER") +
+  Border(color="black", position=c("RIGHT", "LEFT"), 
+         pen="BORDER_THIN") + Fill(backgroundColor = "#D8E4BC",foregroundColor = "#D8E4BC",pattern = "SOLID_FOREGROUND")
+#Style for the Year Headers
+year_header_style <- CellStyle(wb) + Font(wb,color = "black", isBold=TRUE) +
+  Alignment(horizontal = "ALIGN_CENTER") + Border(color="black",position = c("TOP","BOTTOM","LEFT","RIGHT"),pen="BORDER_THICK") +
+  Fill(backgroundColor ="#D8E4BC",foregroundColor = "#D8E4BC",pattern = "SOLID_FOREGROUND")
+
+#We are going to define a useful function for adding titles into the sheets as we create them
+xlsx.addTitle<-function(sheet, rowIndex, title, titleStyle){
+  rows <-createRow(sheet,rowIndex=rowIndex)
+  sheetTitle <-createCell(rows, colIndex=1)
+  setCellValue(sheetTitle[[1,1]], title)
+  setCellStyle(sheetTitle[[1,1]], titleStyle)
+}
+#Define a function to create year headers above the column headers
+xlsx.addyears <- function(sheet,rowIndex,titlestyle){
+  row1 <- createRow(sheet,rowIndex = rowIndex)
+  cells1 <- createCell(row1,colIndex = 2:62)
+  setCellValue(cells1[[1,2]],"2018")
+  addMergedRegion(sheet,2,2,2,32)
+  setCellValue(cells1[[1,33]],"2017")
+  addMergedRegion(sheet,2,2,33,62)
+  setCellStyle(cells1[[1,2]],year_header_style)
+  setCellStyle(cells1[[1,33]],year_header_style)
+}
+
+#Now to create all the sheets! 
+#Starting with class level
+classlevelsheet <- createSheet(wb, sheetName = "Class Level Rollup")
+#Title
+xlsx.addTitle(classlevelsheet, rowIndex=1, title="Class Level Rollup",
+              titleStyle = TITLE_STYLE)
+
+#Formatting
+xlsx.addyears(classlevelsheet,rowIndex = 2,year_header_style)
+Bordernorm <- Border(color = "black",pen= "BORDER_THIN",position = c("TOP","BOTTOM","LEFT","RIGHT"))
+Currdf <- DataFormat("$#,##0.00")
+Numbdf <- DataFormat("#,##0")
+Percdf <-DataFormat("0.00%")
+cs1 <- CellStyle(wb) + (dataFormat = Percdf) + (border = Bordernorm)
+cs2 <- CellStyle(wb) + (dataFormat = Currdf) + (border = Bordernorm)
+cs3 <- CellStyle(wb) + (dataFormat = Numbdf) + (border = Bordernorm)
+curr.format <-  list('1'=cs2,'2'=cs2,'3'=cs2,'4'=cs2,'5'=cs2,'6'=cs2,'7'=cs2,'11'=cs2,'12'=cs2,'13'=cs2,
+                     '14'=cs2,'15'=cs2,'16'=cs2,'17'=cs2,'18'=cs2,'19'=cs2,'23'=cs2,'24'=cs2,'25'=cs2,'29'=cs2,
+                     '30'=cs2,'31'=cs2,'32'=cs2,'33'=cs2,'34'=cs2,'35'=cs2,'36'=cs2,'37'=cs2,'41'=cs2,'42'=cs2,
+                     '43'=cs2,'44'=cs2,'45'=cs2,'46'=cs2,'47'=cs2,'48'=cs2,'49'=cs2,'53'=cs2,'54'=cs2,'55'=cs2,
+                     '59'=cs2,'60'=cs2,'61'=cs2,'62'=cs2)
+
+number.format <- list('8'= cs3,'9'= cs3,'10'= cs3,'20'= cs3,'21'= cs3,'22'= cs3,'26'= cs3,
+                      '27'= cs3,'28'= cs3,'38'= cs3,'39'= cs3,'40'= cs3,'50'= cs3,'51'= cs3,
+                      '52'= cs3,'56'= cs3,'57'= cs3,'58'= cs3)
+Perc.format <- rep(list(cs1), 32)
+format <- c(curr.format, number.format)
+
+#Data
+addDataFrame(x = summarized_data_class, classlevelsheet, startRow=4, startColumn=1, 
+             colnamesStyle = TABLE_COLNAMES_STYLE, colStyle = format)
+autoSizeColumn(classlevelsheet,colIndex = 1:ncol(summarized_data_class)+1)
+setZoom(classlevelsheet,numerator = 80,denominator = 100)
+
+
+#Next is Subclass level
+Subclasssheet <- createSheet(wb, sheetName = "SubClass Level Rollup")
+#Title
+xlsx.addTitle(Subclasssheet, rowIndex=1, title="SubClass Level Rollup",
+              titleStyle = TITLE_STYLE)
+#Data
+addDataFrame(x = summarized_data_subclass, Subclasssheet, startRow=3, startColumn=1, 
+             colnamesStyle = TABLE_COLNAMES_STYLE)
+          
+setColumnWidth(Subclasssheet, colIndex=c(3:ncol(summarized_data_subclass)), colWidth=15)
+setColumnWidth(Subclasssheet, colIndex=c(1:2), colWidth=26)
+#Next is class-Seaon level
+class_seasonsheet <- createSheet(wb, sheetName = "Class-Season Level Rollup")
+#Title
+xlsx.addTitle(class_seasonsheet, rowIndex=1, title="Class-Season Level Rollup",
+              titleStyle = TITLE_STYLE)
+#Data
+addDataFrame(x = summarized_data_class_season, class_seasonsheet, startRow=3, startColumn=1, 
+             colnamesStyle = TABLE_COLNAMES_STYLE)
+
+
+
+#Next is subclass-season level
+subclass_seasonsheet <- createSheet(wb, sheetName = "SubClass-Season Level Rollup")
+#Title
+xlsx.addTitle(subclass_seasonsheet, rowIndex=1, title="SubClass-Season Level Rollup",
+              titleStyle = TITLE_STYLE)
+#Data
+addDataFrame(x = summarized_data_subclass_season, sheet = subclass_seasonsheet, startRow=3, startColumn=1, 
+             colnamesStyle = TABLE_COLNAMES_STYLE)
+             
+setColumnWidth(subclass_seasonsheet, colIndex=c(1:ncol(summarized_data_subclass_season)), colWidth=17)
+
+#Next we can do class level comps
+classlevelcomps_sheet <- createSheet(wb, sheetName = "Class Level Comps")
+#Title
+xlsx.addTitle(classlevelcomps_sheet, rowIndex=1, title="Class Level Comps",
+              titleStyle = TITLE_STYLE)
+#Data
+addDataFrame(x = summarized_data_class_comps, classlevelcomps_sheet, startRow=3, startColumn=1, 
+             colnamesStyle = TABLE_COLNAMES_STYLE)
+             
+setColumnWidth(classlevelcomps_sheet, colIndex=c(1:ncol(summarized_data_class_comps)), colWidth=17)
+
+#And finally we want subclass comps
+subclasscomps_sheet <- createSheet(wb, sheetName = "SubClass Level Comps")
+#Title
+xlsx.addTitle(subclasscomps_sheet, rowIndex=1, title="Subclass Level Comps",
+              titleStyle = TITLE_STYLE)
+#Data
+addDataFrame(x = summarized_data_subclass_comps, subclasscomps_sheet, startRow=3, startColumn=1, 
+             colnamesStyle = TABLE_COLNAMES_STYLE)
+            
+setColumnWidth(subclasscomps_sheet, colIndex=c(1:ncol(summarized_data_subclass_comps)), colWidth=17)
+
+saveWorkbook(wb, "r-xlsx-report-example.xlsx")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
